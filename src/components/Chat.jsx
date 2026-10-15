@@ -130,12 +130,27 @@ function Chat() {
     const [isSending, setIsSending] = useState(false);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [deleteConfirmation, setDeleteConfirmation] = useState(null);
+    const [theme, setTheme] = useState(() => {
+        try {
+            return localStorage.getItem("subchat-theme") === "dark" ? "dark" : "light";
+        } catch {
+            return "light";
+        }
+    });
 
     const activeChat =
         chats.find((chat) => chat.id === activeChatId) || chats[0];
 
     const messages = activeChat?.messages || [];
     const subchats = activeChat?.subchats || [];
+
+    useEffect(() => {
+        try {
+            localStorage.setItem("subchat-theme", theme);
+        } catch (error) {
+            console.error("Could not save theme preference:", error);
+        }
+    }, [theme]);
 
     useEffect(() => {
         try {
@@ -203,6 +218,10 @@ function Chat() {
         setActiveChatId(chatId);
         setPendingSelection(null);
         window.getSelection()?.removeAllRanges();
+    };
+
+    const handleToggleTheme = () => {
+        setTheme((currentTheme) => currentTheme === "light" ? "dark" : "light");
     };
 
     const handleTogglePin = (chatId) => {
@@ -438,7 +457,7 @@ function Chat() {
         : 0;
 
     return (
-        <div className={`chat-layout ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+        <div className={`chat-layout theme-${theme} ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`} data-theme={theme}>
             <aside className={`history-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
                 <div className="sidebar-top">
                     {!sidebarCollapsed && (
@@ -519,14 +538,26 @@ function Chat() {
                         {activeChat?.title || "New Chat"}
                     </div>
 
-                    <button
-                        type="button"
-                        className="new-chat-button"
-                        onClick={handleNewChat}
-                        disabled={isSending}
-                    >
-                        + New Chat
-                    </button>
+                    <div className="chat-topbar-actions">
+                        <button
+                            type="button"
+                            className="theme-toggle-button"
+                            onClick={handleToggleTheme}
+                            title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                        >
+                            <Icon name={theme === "light" ? "moon" : "sun"} size={17} />
+                            <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
+                        </button>
+                        <button
+                            type="button"
+                            className="new-chat-button"
+                            onClick={handleNewChat}
+                            disabled={isSending}
+                        >
+                            <span aria-hidden="true">＋</span> New Chat
+                        </button>
+                    </div>
                 </div>
 
                 <div className="messages">
@@ -639,6 +670,8 @@ function Icon({ name, size = 16 }) {
     if (name === "pin") return <svg {...common}><path d="M16 3l5 5-4 1-4 4-1 5-2-2-2-2-2-2 5-1 4-4z" /><path d="M5 19l6-6" /></svg>;
     if (name === "trash") return <svg {...common}><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 10v6M14 10v6" /></svg>;
     if (name === "chat") return <svg {...common}><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-6.5A7.5 7.5 0 1 1 20 11.5Z" /></svg>;
+    if (name === "moon") return <svg {...common}><path d="M20.9 13A8.5 8.5 0 0 1 11 3.1 8.5 8.5 0 1 0 20.9 13Z" /></svg>;
+    if (name === "sun") return <svg {...common}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg>;
     return null;
 }
 
