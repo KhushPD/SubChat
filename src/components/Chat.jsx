@@ -1,16 +1,56 @@
-import { useState } from "react";
+
+import { useEffect, useState } from "react";
 import Message from "./Message";
 import ChatInput from "./ChatInput";
 import Subchat from "./Subchat";
 import messages from "../data/messages";
 
+const STORAGE_KEY = "subchat-saved-conversations";
+
+function loadSavedSubchats() {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+
+        if (!saved) return [];
+
+        const parsed = JSON.parse(saved);
+
+        if (!Array.isArray(parsed)) return [];
+
+        return parsed.filter(
+            (subchat) =>
+                subchat &&
+                subchat.id !== undefined &&
+                typeof subchat.concept === "string" &&
+                Array.isArray(subchat.messages)
+        ).map((subchat) => ({
+            ...subchat,
+            isCollapsed: Boolean(subchat.isCollapsed)
+        }));
+    } catch (error) {
+        console.error("Could not restore saved Subchats:", error);
+        return [];
+    }
+}
+
 function Chat() {
     const [pendingSelection, setPendingSelection] = useState(null);
-    const [subchats, setSubchats] = useState([]);
+    const [subchats, setSubchats] = useState(loadSavedSubchats);
 
     const originalQuestion = messages.find(
         (message) => message.role === "user"
     );
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(
+                STORAGE_KEY,
+                JSON.stringify(subchats)
+            );
+        } catch (error) {
+            console.error("Could not save Subchats:", error);
+        }
+    }, [subchats]);
 
     const handleTextSelect = ({ text, sourceMessage }) => {
         setPendingSelection({
@@ -23,9 +63,10 @@ function Chat() {
         if (!pendingSelection) return;
 
         const newSubchat = {
-            id: Date.now(),
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             concept: pendingSelection.text,
             sourceMessage: pendingSelection.sourceMessage,
+            isCollapsed: false,
             messages: [
                 {
                     id: `initial-${Date.now()}`,
@@ -35,32 +76,41 @@ function Chat() {
             ]
         };
 
-        setSubchats((prev) => [
-            ...prev,
+        setSubchats((previous) => [
+            ...previous,
             newSubchat
         ]);
 
         setPendingSelection(null);
-
         window.getSelection()?.removeAllRanges();
     };
 
     const closeSubchat = (id) => {
-        setSubchats((prev) =>
-            prev.filter((subchat) => subchat.id !== id)
+        setSubchats((previous) =>
+            previous.filter((subchat) => subchat.id !== id)
         );
     };
 
-    const updateSubchatMessages = (
-        id,
-        newMessages
-    ) => {
-        setSubchats((prev) =>
-            prev.map((subchat) =>
+    const updateSubchatMessages = (id, newMessages) => {
+        setSubchats((previous) =>
+            previous.map((subchat) =>
                 subchat.id === id
                     ? {
                         ...subchat,
                         messages: newMessages
+                    }
+                    : subchat
+            )
+        );
+    };
+
+    const toggleSubchatCollapsed = (id) => {
+        setSubchats((previous) =>
+            previous.map((subchat) =>
+                subchat.id === id
+                    ? {
+                        ...subchat,
+                        isCollapsed: !subchat.isCollapsed
                     }
                     : subchat
             )
@@ -84,7 +134,6 @@ function Chat() {
                         <div className="selection-action">
                             <div className="selection-preview">
                                 <span>Selected</span>
-
                                 <strong>
                                     "{pendingSelection.text}"
                                 </strong>
@@ -106,12 +155,8 @@ function Chat() {
                         <Subchat
                             key={subchat.id}
                             concept={subchat.concept}
-                            originalQuestion={
-                                originalQuestion?.content
-                            }
-                            sourceMessage={
-                                subchat.sourceMessage
-                            }
+                            originalQuestion={originalQuestion?.content}
+                            sourceMessage={subchat.sourceMessage}
                             messages={subchat.messages}
                             setMessages={(newMessages) =>
                                 updateSubchatMessages(
@@ -119,9 +164,11 @@ function Chat() {
                                     newMessages
                                 )
                             }
-                            onClose={() =>
-                                closeSubchat(subchat.id)
+                            isCollapsed={subchat.isCollapsed}
+                            onToggleCollapsed={() =>
+                                toggleSubchatCollapsed(subchat.id)
                             }
+                            onClose={() => closeSubchat(subchat.id)}
                         />
                     ))}
                 </div>

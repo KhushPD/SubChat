@@ -1,4 +1,45 @@
+
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
+
+function formatMarkdown(text = "") {
+  return text
+    .replace(/\\([#*_|])/g, "$1")
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `\n$$\n${math}\n$$\n`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`)
+    .replace(/\\([`~])/g, "$1");
+}
+
+function FormattedResponse({ content }) {
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[
+          [rehypeKatex, { throwOnError: false, strict: "ignore" }]
+        ]}
+        components={{
+          table: ({ children }) => (
+            <div className="markdown-table-wrapper">
+              <table>{children}</table>
+            </div>
+          ),
+          a: ({ children, href }) => (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          )
+        }}
+      >
+        {formatMarkdown(content)}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 function Subchat({
   concept,
@@ -6,126 +47,206 @@ function Subchat({
   sourceMessage,
   messages,
   setMessages,
+  isCollapsed,
+  onToggleCollapsed,
   onClose
 }) {
   const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
 
     const userMessage = {
       id: Date.now(),
       role: "user",
-      content: input
+      content: input.trim()
     };
 
-    const aiMessage = {
-      id: Date.now() + 1,
-      role: "assistant",
-      content: `Here's a simple way to understand "${concept}": think of it as a concept that can be broken down into smaller ideas and examples. In a real version, the AI would use the surrounding conversation context to give you a relevant explanation.`
-    };
+    const updatedMessages = [...messages, userMessage];
 
-    setMessages([
-      ...messages,
-      userMessage,
-      aiMessage
-    ]);
-
+    setMessages(updatedMessages);
     setInput("");
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        "http://localhost:3001/api/chat",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            concept,
+            originalQuestion,
+            sourceMessage,
+            conversation: updatedMessages
+          })
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.details ||
+          data.error ||
+          `Server error: ${response.status}`
+        );
+      }
+
+      if (!data.reply) {
+        throw new Error("The API returned an empty response.");
+      }
+
+      setMessages([
+        ...updatedMessages,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          content: data.reply
+        }
+      ]);
+    } catch (error) {
+      console.error("Subchat request failed:", error);
+
+      setMessages([
+        ...updatedMessages,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          content: `Connection error: ${error.message}`
+        }
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleKeyDown = (event) => {
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       handleSend();
     }
   };
 
   return (
-    <aside className="subchat-panel">
+    <aside
+      className={`subchat-panel ${isCollapsed ? "collapsed" : ""}`}
+    >
       <div className="subchat-header">
-        <div>
-          <div className="subchat-title">
-            Subchat
-          </div>
-
-          <div className="subchat-subtitle">
-            Exploring selected text
-          </div>
-        </div>
-
         <button
-          className="close-button"
-          onClick={onClose}
-          title="Close Subchat"
+          className="subchat-heading-button"
+          onClick={onToggleCollapsed}
+          aria-expanded={!isCollapsed}
+          title={isCollapsed ? "Expand Subchat" : "Collapse Subchat"}
         >
-          ×
+          <span className="collapse-indicator">
+            {isCollapsed ? "▸" : "▾"}
+          </span>
+
+          <span className="subchat-heading-text">
+            <span className="subchat-title">Subchat</span>
+            <span className="subchat-subtitle">
+              {concept.length > 35
+                ? `${concept.slice(0, 35)}…`
+                : concept}
+            </span>
+          </span>
         </button>
-      </div>
 
-      <div className="subchat-context">
-        <div className="context-label">
-          EXPLORING
-        </div>
-
-        <div className="context-concept">
-          "{concept}"
-        </div>
-
-        <div className="context-section">
-          <div className="context-heading">
-            Original question
-          </div>
-
-          <p>
-            {originalQuestion}
-          </p>
-        </div>
-
-        <div className="context-section">
-          <div className="context-heading">
-            From the AI response
-          </div>
-
-          <p>
-            {sourceMessage}
-          </p>
-        </div>
-      </div>
-
-      <div className="subchat-messages">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`subchat-message ${message.role}`}
+        <div className="subchat-header-actions">
+          <button
+            className="collapse-button"
+            onClick={onToggleCollapsed}
+            title={isCollapsed ? "Expand Subchat" : "Collapse Subchat"}
+            aria-label={isCollapsed ? "Expand Subchat" : "Collapse Subchat"}
           >
-            <div className="message-label">
-              {message.role === "user"
-                ? "You"
-                : "AI"}
+            {isCollapsed ? "□" : "−"}
+          </button>
+
+          <button
+            className="close-button"
+            onClick={onClose}
+            title="Close Subchat"
+            aria-label="Close Subchat"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {!isCollapsed && (
+        <>
+          <div className="subchat-context">
+            <div className="context-label">EXPLORING</div>
+
+            <div className="context-concept">
+              "{concept}"
             </div>
 
-            <p>
-              {message.content}
-            </p>
+            <div className="context-section">
+              <div className="context-heading">
+                Original question
+              </div>
+              <p>{originalQuestion}</p>
+            </div>
+
+            <div className="context-section">
+              <div className="context-heading">
+                From the AI response
+              </div>
+              <p>{sourceMessage}</p>
+            </div>
           </div>
-        ))}
-      </div>
 
-      <div className="subchat-input">
-        <input
-          type="text"
-          value={input}
-          onChange={(event) =>
-            setInput(event.target.value)
-          }
-          onKeyDown={handleKeyDown}
-          placeholder={`Ask about "${concept}"...`}
-        />
+          <div className="subchat-messages">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`subchat-message ${message.role}`}
+              >
+                <div className="message-label">
+                  {message.role === "user" ? "You" : "AI"}
+                </div>
 
-        <button onClick={handleSend}>
-          Send
-        </button>
-      </div>
+                {message.role === "assistant" &&
+                  !message.content.startsWith("Connection error:") ? (
+                  <FormattedResponse content={message.content} />
+                ) : (
+                  <p>{message.content}</p>
+                )}
+              </div>
+            ))}
+
+            {isLoading && (
+              <div className="subchat-message assistant">
+                <div className="message-label">AI</div>
+                <p>Thinking...</p>
+              </div>
+            )}
+          </div>
+
+          <div className="subchat-input">
+            <input
+              type="text"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isLoading}
+              placeholder={`Ask about "${concept}"...`}
+            />
+
+            <button
+              onClick={handleSend}
+              disabled={isLoading || !input.trim()}
+            >
+              {isLoading ? "..." : "Send"}
+            </button>
+          </div>
+        </>
+      )}
     </aside>
   );
 }
