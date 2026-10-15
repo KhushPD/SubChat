@@ -4,22 +4,17 @@ import Message from "./Message";
 import ChatInput from "./ChatInput";
 import Subchat from "./Subchat";
 
-const MESSAGES_STORAGE_KEY = "subchat-main-messages";
-const SUBCHATS_STORAGE_KEY = "subchat-saved-conversations";
+const CHATS_STORAGE_KEY = "subchat-chat-history";
+const OLD_MESSAGES_KEY = "subchat-main-messages";
+const OLD_SUBCHATS_KEY = "subchat-saved-conversations";
 
-function loadFromStorage(key, fallback, validator) {
-    try {
-        const saved = localStorage.getItem(key);
-
-        if (!saved) return fallback;
-
-        const parsed = JSON.parse(saved);
-
-        return validator(parsed) ? parsed : fallback;
-    } catch (error) {
-        console.error(`Could not restore ${key}:`, error);
-        return fallback;
-    }
+function createChat(title = "New Chat") {
+    return {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title,
+        messages: [],
+        subchats: [],
+    };
 }
 
 function isValidMessages(value) {
@@ -28,78 +23,112 @@ function isValidMessages(value) {
         value.every(
             (message) =>
                 message &&
-                typeof message.role === "string" &&
+                ["user", "assistant"].includes(message.role) &&
                 typeof message.content === "string"
         )
     );
 }
 
-function loadSavedMessages() {
-    return loadFromStorage(
-        MESSAGES_STORAGE_KEY,
-        [],
-        isValidMessages
-    );
-}
+function loadChats() {
+    try {
+        const saved = localStorage.getItem(CHATS_STORAGE_KEY);
 
-function loadSavedSubchats() {
-    const saved = loadFromStorage(
-        SUBCHATS_STORAGE_KEY,
-        [],
-        Array.isArray
-    );
+        if (saved) {
+            const parsed = JSON.parse(saved);
 
-    return saved
-        .filter(
-            (subchat) =>
-                subchat &&
-                subchat.id !== undefined &&
-                typeof subchat.concept === "string" &&
-                Array.isArray(subchat.messages)
-        )
-        .map((subchat) => ({
-            ...subchat,
-            isCollapsed: Boolean(subchat.isCollapsed),
-            contextMessages: Array.isArray(subchat.contextMessages)
-                ? subchat.contextMessages
-                : [],
-            messages: isValidMessages(subchat.messages)
-                ? subchat.messages
-                : [],
-        }));
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed
+                    .filter((chat) => chat && chat.id)
+                    .map((chat) => ({
+                        ...chat,
+                        title: chat.title || "New Chat",
+                        messages: isValidMessages(chat.messages)
+                            ? chat.messages
+                            : [],
+                        subchats: Array.isArray(chat.subchats)
+                            ? chat.subchats
+                            : [],
+                    }));
+            }
+        }
+
+        // Migrate the existing single-chat data on first use.
+        const oldMessages = JSON.parse(
+            localStorage.getItem(OLD_MESSAGES_KEY) || "[]"
+        );
+
+        const oldSubchats = JSON.parse(
+            localStorage.getItem(OLD_SUBCHATS_KEY) || "[]"
+        );
+
+        const initialChat = createChat(
+            Array.isArray(oldMessages) && oldMessages.length > 0
+                ? String(oldMessages.find((m) => m.role === "user")?.content || "Previous Chat").slice(0, 40)
+                : "New Chat"
+        );
+
+        initialChat.messages = isValidMessages(oldMessages)
+            ? oldMessages
+            : [];
+
+        initialChat.subchats = Array.isArray(oldSubchats)
+            ? oldSubchats.filter(
+                (subchat) =>
+                    subchat &&
+                    subchat.id !== undefined &&
+                    typeof subchat.concept === "string" &&
+                    Array.isArray(subchat.messages)
+            )
+            : [];
+
+        return [initialChat];
+    } catch (error) {
+        console.error("Could not restore chat history:", error);
+        return [createChat()];
+    }
 }
 
 function Chat() {
-    const [messages, setMessages] = useState(loadSavedMessages);
-    const [subchats, setSubchats] = useState(loadSavedSubchats);
+    const [chats, setChats] = useState(loadChats);
+    const [activeChatId, setActiveChatId] = useState(
+        () => {
+            try {
+                return localStorage.getItem("subchat-active-chat");
+            } catch {
+                return null;
+            }
+        }
+    );
+
     const [pendingSelection, setPendingSelection] = useState(null);
     const [isSending, setIsSending] = useState(false);
 
-    // Save the main conversation whenever it changes.
+    const activeChat =
+        chats.find((chat) => chat.id === activeChatId) || chats[0];
+
+    const messages = activeChat?.messages || [];
+    const subchats = activeChat?.subchats || [];
+
     useEffect(() => {
         try {
-            localStorage.setItem(
-                MESSAGES_STORAGE_KEY,
-                JSON.stringify(messages)
-            );
+            localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
         } catch (error) {
-            console.error("Could not save main conversation:", error);
+            console.error("Could not save chat history:", error);
         }
-    }, [messages]);
+    }, [chats]);
 
-    // Save Subchat conversations, including their messages and collapsed state.
     useEffect(() => {
-        try {
-            localStorage.setItem(
-                SUBCHATS_STORAGE_KEY,
-                JSON.stringify(subchats)
-            );
-        } catch (error) {
-            console.error("Could not save Subchats:", error);
-        }
-    }, [subchats]);
+        if (!activeChat) return;
 
-    // Dismiss the selection popup on scrolling or Escape.
+        setActiveChatId(activeChat.id);
+
+        try {
+            localStorage.setItem("subchat-active-chat", activeChat.id);
+        } catch (error) {
+            console.error("Could not save active chat:", error);
+        }
+    }, [activeChat?.id]);
+
     useEffect(() => {
         const dismissSelection = (event) => {
             if (
@@ -119,8 +148,39 @@ function Chat() {
         };
     }, []);
 
+    const updateActiveChat = (updater) => {
+        if (!activeChat) return;
+
+        setChats((previous) =>
+            previous.map((chat) =>
+                chat.id === activeChat.id ? updater(chat) : chat
+            )
+        );
+    };
+
+    const handleNewChat = () => {
+        if (isSending) return;
+
+        const newChat = createChat();
+
+        setChats((previous) => [...previous, newChat]);
+        setActiveChatId(newChat.id);
+        setPendingSelection(null);
+        window.getSelection()?.removeAllRanges();
+    };
+
+    const handleSelectChat = (chatId) => {
+        if (isSending || chatId === activeChat?.id) return;
+
+        setActiveChatId(chatId);
+        setPendingSelection(null);
+        window.getSelection()?.removeAllRanges();
+    };
+
     const handleMainSend = async (text) => {
-        if (isSending || !text.trim()) return;
+        if (isSending || !text.trim() || !activeChat) return;
+
+        const chatId = activeChat.id;
 
         const userMessage = {
             id: `${Date.now()}-user`,
@@ -130,7 +190,21 @@ function Chat() {
 
         const updatedMessages = [...messages, userMessage];
 
-        setMessages(updatedMessages);
+        setChats((previous) =>
+            previous.map((chat) =>
+                chat.id === chatId
+                    ? {
+                        ...chat,
+                        title:
+                            chat.messages.length === 0
+                                ? text.trim().slice(0, 40)
+                                : chat.title,
+                        messages: updatedMessages,
+                    }
+                    : chat
+            )
+        );
+
         setPendingSelection(null);
         setIsSending(true);
 
@@ -164,25 +238,43 @@ function Chat() {
                 throw new Error("The AI returned an empty response.");
             }
 
-            setMessages((previous) => [
-                ...previous,
-                {
-                    id: `${Date.now()}-assistant`,
-                    role: "assistant",
-                    content: data.reply,
-                },
-            ]);
+            setChats((previous) =>
+                previous.map((chat) =>
+                    chat.id === chatId
+                        ? {
+                            ...chat,
+                            messages: [
+                                ...chat.messages,
+                                {
+                                    id: `${Date.now()}-assistant`,
+                                    role: "assistant",
+                                    content: data.reply,
+                                },
+                            ],
+                        }
+                        : chat
+                )
+            );
         } catch (error) {
             console.error("Main chat error:", error);
 
-            setMessages((previous) => [
-                ...previous,
-                {
-                    id: `${Date.now()}-error`,
-                    role: "assistant",
-                    content: `Sorry, I couldn't generate a response. ${error.message}`,
-                },
-            ]);
+            setChats((previous) =>
+                previous.map((chat) =>
+                    chat.id === chatId
+                        ? {
+                            ...chat,
+                            messages: [
+                                ...chat.messages,
+                                {
+                                    id: `${Date.now()}-error`,
+                                    role: "assistant",
+                                    content: `Sorry, I couldn't generate a response. ${error.message}`,
+                                },
+                            ],
+                        }
+                        : chat
+                )
+            );
         } finally {
             setIsSending(false);
         }
@@ -201,11 +293,13 @@ function Chat() {
             sourceMessage,
             sourceMessageId,
             position,
+            chatId: activeChat?.id,
         });
     };
 
     const openSubchat = () => {
-        if (!pendingSelection) return;
+        if (!pendingSelection || !activeChat) return;
+        if (pendingSelection.chatId !== activeChat.id) return;
 
         const sourceIndex = messages.findIndex(
             (message) => message.id === pendingSelection.sourceMessageId
@@ -246,37 +340,44 @@ function Chat() {
             ],
         };
 
-        setSubchats((previous) => [...previous, newSubchat]);
+        updateActiveChat((chat) => ({
+            ...chat,
+            subchats: [...chat.subchats, newSubchat],
+        }));
+
         setPendingSelection(null);
         window.getSelection()?.removeAllRanges();
     };
 
     const closeSubchat = (id) => {
-        setSubchats((previous) =>
-            previous.filter((subchat) => subchat.id !== id)
-        );
+        updateActiveChat((chat) => ({
+            ...chat,
+            subchats: chat.subchats.filter((subchat) => subchat.id !== id),
+        }));
     };
 
     const updateSubchatMessages = (id, newMessages) => {
         if (!Array.isArray(newMessages)) return;
 
-        setSubchats((previous) =>
-            previous.map((subchat) =>
+        updateActiveChat((chat) => ({
+            ...chat,
+            subchats: chat.subchats.map((subchat) =>
                 subchat.id === id
                     ? { ...subchat, messages: newMessages }
                     : subchat
-            )
-        );
+            ),
+        }));
     };
 
     const toggleSubchatCollapsed = (id) => {
-        setSubchats((previous) =>
-            previous.map((subchat) =>
+        updateActiveChat((chat) => ({
+            ...chat,
+            subchats: chat.subchats.map((subchat) =>
                 subchat.id === id
                     ? { ...subchat, isCollapsed: !subchat.isCollapsed }
                     : subchat
-            )
-        );
+            ),
+        }));
     };
 
     const selectionPosition = pendingSelection?.position;
@@ -295,6 +396,35 @@ function Chat() {
     return (
         <div className="chat-layout">
             <main className="chat">
+                <div className="chat-topbar">
+                    <div className="chat-topbar-title">Subchat</div>
+
+                    <div className="chat-topbar-actions">
+                        <select
+                            className="chat-history-select"
+                            value={activeChat?.id || ""}
+                            onChange={(event) => handleSelectChat(event.target.value)}
+                            disabled={isSending}
+                            aria-label="Switch conversation"
+                        >
+                            {chats.map((chat) => (
+                                <option key={chat.id} value={chat.id}>
+                                    {chat.title}
+                                </option>
+                            ))}
+                        </select>
+
+                        <button
+                            type="button"
+                            className="new-chat-button"
+                            onClick={handleNewChat}
+                            disabled={isSending}
+                        >
+                            + New Chat
+                        </button>
+                    </div>
+                </div>
+
                 <div className="messages">
                     {messages.length === 0 && !isSending && (
                         <div className="empty-chat">
@@ -330,23 +460,25 @@ function Chat() {
                 />
             </main>
 
-            {pendingSelection && selectionPosition && (
-                <div
-                    className="selection-popup"
-                    style={{
-                        top: `${popupTop}px`,
-                        left: `${popupLeft}px`,
-                    }}
-                >
-                    <button
-                        type="button"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={openSubchat}
+            {pendingSelection &&
+                selectionPosition &&
+                pendingSelection.chatId === activeChat?.id && (
+                    <div
+                        className="selection-popup"
+                        style={{
+                            top: `${popupTop}px`,
+                            left: `${popupLeft}px`,
+                        }}
                     >
-                        Explore in Subchat <span aria-hidden="true">↗</span>
-                    </button>
-                </div>
-            )}
+                        <button
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={openSubchat}
+                        >
+                            Explore in Subchat <span aria-hidden="true">↗</span>
+                        </button>
+                    </div>
+                )}
 
             {subchats.length > 0 && (
                 <div className="subchat-stack">
