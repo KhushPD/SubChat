@@ -10,23 +10,26 @@ const STORAGE_KEY = "subchat-saved-conversations";
 function loadSavedSubchats() {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
-
         if (!saved) return [];
 
         const parsed = JSON.parse(saved);
-
         if (!Array.isArray(parsed)) return [];
 
-        return parsed.filter(
-            (subchat) =>
-                subchat &&
-                subchat.id !== undefined &&
-                typeof subchat.concept === "string" &&
-                Array.isArray(subchat.messages)
-        ).map((subchat) => ({
-            ...subchat,
-            isCollapsed: Boolean(subchat.isCollapsed)
-        }));
+        return parsed
+            .filter(
+                (subchat) =>
+                    subchat &&
+                    subchat.id !== undefined &&
+                    typeof subchat.concept === "string" &&
+                    Array.isArray(subchat.messages)
+            )
+            .map((subchat) => ({
+                ...subchat,
+                isCollapsed: Boolean(subchat.isCollapsed),
+                contextMessages: Array.isArray(subchat.contextMessages)
+                    ? subchat.contextMessages
+                    : []
+            }));
     } catch (error) {
         console.error("Could not restore saved Subchats:", error);
         return [];
@@ -36,10 +39,6 @@ function loadSavedSubchats() {
 function Chat() {
     const [pendingSelection, setPendingSelection] = useState(null);
     const [subchats, setSubchats] = useState(loadSavedSubchats);
-
-    const originalQuestion = messages.find(
-        (message) => message.role === "user"
-    );
 
     useEffect(() => {
         try {
@@ -52,20 +51,52 @@ function Chat() {
         }
     }, [subchats]);
 
-    const handleTextSelect = ({ text, sourceMessage }) => {
+    const handleTextSelect = ({
+        text,
+        sourceMessage,
+        sourceMessageId
+    }) => {
         setPendingSelection({
             text,
-            sourceMessage
+            sourceMessage,
+            sourceMessageId
         });
     };
 
     const openSubchat = () => {
         if (!pendingSelection) return;
 
+        const sourceIndex = messages.findIndex(
+            (message) => message.id === pendingSelection.sourceMessageId
+        );
+
+        const safeIndex = sourceIndex >= 0 ? sourceIndex : 0;
+
+        // Include up to five preceding messages and the selected AI response.
+        const contextMessages = messages
+            .slice(Math.max(0, safeIndex - 5), safeIndex + 1)
+            .map((message) => ({
+                role: message.role,
+                content: message.content
+            }));
+
+        // Use the nearest user question before the selected AI response.
+        const precedingUserMessages = messages
+            .slice(0, safeIndex)
+            .filter((message) => message.role === "user");
+
+        const nearestQuestion =
+            precedingUserMessages.length > 0
+                ? precedingUserMessages[precedingUserMessages.length - 1].content
+                : messages.find((message) => message.role === "user")?.content || "";
+
         const newSubchat = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             concept: pendingSelection.text,
             sourceMessage: pendingSelection.sourceMessage,
+            sourceMessageId: pendingSelection.sourceMessageId,
+            originalQuestion: nearestQuestion,
+            contextMessages,
             isCollapsed: false,
             messages: [
                 {
@@ -76,11 +107,7 @@ function Chat() {
             ]
         };
 
-        setSubchats((previous) => [
-            ...previous,
-            newSubchat
-        ]);
-
+        setSubchats((previous) => [...previous, newSubchat]);
         setPendingSelection(null);
         window.getSelection()?.removeAllRanges();
     };
@@ -95,10 +122,7 @@ function Chat() {
         setSubchats((previous) =>
             previous.map((subchat) =>
                 subchat.id === id
-                    ? {
-                        ...subchat,
-                        messages: newMessages
-                    }
+                    ? { ...subchat, messages: newMessages }
                     : subchat
             )
         );
@@ -108,10 +132,7 @@ function Chat() {
         setSubchats((previous) =>
             previous.map((subchat) =>
                 subchat.id === id
-                    ? {
-                        ...subchat,
-                        isCollapsed: !subchat.isCollapsed
-                    }
+                    ? { ...subchat, isCollapsed: !subchat.isCollapsed }
                     : subchat
             )
         );
@@ -124,6 +145,7 @@ function Chat() {
                     {messages.map((message) => (
                         <Message
                             key={message.id}
+                            id={message.id}
                             role={message.role}
                             content={message.content}
                             onTextSelect={handleTextSelect}
@@ -134,9 +156,7 @@ function Chat() {
                         <div className="selection-action">
                             <div className="selection-preview">
                                 <span>Selected</span>
-                                <strong>
-                                    "{pendingSelection.text}"
-                                </strong>
+                                <strong>"{pendingSelection.text}"</strong>
                             </div>
 
                             <button onClick={openSubchat}>
@@ -155,19 +175,15 @@ function Chat() {
                         <Subchat
                             key={subchat.id}
                             concept={subchat.concept}
-                            originalQuestion={originalQuestion?.content}
+                            originalQuestion={subchat.originalQuestion || ""}
                             sourceMessage={subchat.sourceMessage}
+                            contextMessages={subchat.contextMessages || []}
                             messages={subchat.messages}
                             setMessages={(newMessages) =>
-                                updateSubchatMessages(
-                                    subchat.id,
-                                    newMessages
-                                )
+                                updateSubchatMessages(subchat.id, newMessages)
                             }
                             isCollapsed={subchat.isCollapsed}
-                            onToggleCollapsed={() =>
-                                toggleSubchatCollapsed(subchat.id)
-                            }
+                            onToggleCollapsed={() => toggleSubchatCollapsed(subchat.id)}
                             onClose={() => closeSubchat(subchat.id)}
                         />
                     ))}

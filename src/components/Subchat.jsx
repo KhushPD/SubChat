@@ -45,6 +45,7 @@ function Subchat({
   concept,
   originalQuestion,
   sourceMessage,
+  contextMessages = [],
   messages,
   setMessages,
   isCollapsed,
@@ -81,6 +82,7 @@ function Subchat({
             concept,
             originalQuestion,
             sourceMessage,
+            contextMessages,
             conversation: updatedMessages
           })
         }
@@ -132,9 +134,7 @@ function Subchat({
   };
 
   return (
-    <aside
-      className={`subchat-panel ${isCollapsed ? "collapsed" : ""}`}
-    >
+    <aside className={`subchat-panel ${isCollapsed ? "collapsed" : ""}`}>
       <div className="subchat-header">
         <button
           className="subchat-heading-button"
@@ -149,9 +149,7 @@ function Subchat({
           <span className="subchat-heading-text">
             <span className="subchat-title">Subchat</span>
             <span className="subchat-subtitle">
-              {concept.length > 35
-                ? `${concept.slice(0, 35)}…`
-                : concept}
+              {concept.length > 35 ? `${concept.slice(0, 35)}…` : concept}
             </span>
           </span>
         </button>
@@ -181,23 +179,33 @@ function Subchat({
         <>
           <div className="subchat-context">
             <div className="context-label">EXPLORING</div>
+            <div className="context-concept">"{concept}"</div>
 
-            <div className="context-concept">
-              "{concept}"
-            </div>
+            <details className="inherited-context" open>
+              <summary>Relevant conversation context</summary>
+
+              <div className="inherited-context-messages">
+                {contextMessages.length > 0 ? (
+                  contextMessages.map((message, index) => (
+                    <div
+                      key={`${index}-${message.role}`}
+                      className="inherited-context-message"
+                    >
+                      <span className="context-heading">
+                        {message.role === "user" ? "You" : "AI"}
+                      </span>
+                      <p>{message.content}</p>
+                    </div>
+                  ))
+                ) : (
+                  <p>{sourceMessage}</p>
+                )}
+              </div>
+            </details>
 
             <div className="context-section">
-              <div className="context-heading">
-                Original question
-              </div>
-              <p>{originalQuestion}</p>
-            </div>
-
-            <div className="context-section">
-              <div className="context-heading">
-                From the AI response
-              </div>
-              <p>{sourceMessage}</p>
+              <div className="context-heading">Relevant user question</div>
+              <p>{originalQuestion || "No earlier question available."}</p>
             </div>
           </div>
 

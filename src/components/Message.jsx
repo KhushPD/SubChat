@@ -1,4 +1,5 @@
-function Message({ role, content, onTextSelect }) {
+
+function Message({ id, role, content, onTextSelect }) {
     const handleMouseUp = () => {
         if (role !== "assistant") return;
 
@@ -9,7 +10,8 @@ function Message({ role, content, onTextSelect }) {
 
         onTextSelect({
             text: selectedText,
-            sourceMessage: content
+            sourceMessage: content,
+            sourceMessageId: id
         });
     };
 
