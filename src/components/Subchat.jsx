@@ -6,8 +6,12 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
+const API_URL = "http://localhost:3001/api/chat";
+const MAX_MESSAGES = 6;
+const MAX_MESSAGE_LENGTH = 1500;
+
 function formatMarkdown(text = "") {
-  return text
+  return String(text)
     .replace(/\\([#*_|])/g, "$1")
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `\n$$\n${math}\n$$\n`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`)
@@ -19,20 +23,16 @@ function FormattedResponse({ content }) {
     <div className="markdown-content">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[
-          [rehypeKatex, { throwOnError: false, strict: "ignore" }]
-        ]}
+        rehypePlugins={[rehypeKatex]}
         components={{
-          table: ({ children }) => (
+          a: ({ node, ...props }) => (
+            <a {...props} target="_blank" rel="noopener noreferrer" />
+          ),
+          table: ({ node, ...props }) => (
             <div className="markdown-table-wrapper">
-              <table>{children}</table>
+              <table {...props} />
             </div>
           ),
-          a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          )
         }}
       >
         {formatMarkdown(content)}
@@ -42,134 +42,118 @@ function FormattedResponse({ content }) {
 }
 
 function Subchat({
-  concept,
-  originalQuestion,
-  sourceMessage,
+  concept = "Selected concept",
+  originalQuestion = "",
+  sourceMessage = "",
   contextMessages = [],
-  messages,
+  messages: messagesProp = [],
   setMessages,
-  isCollapsed,
+  isCollapsed = false,
   onToggleCollapsed,
-  onClose
+  onClose,
 }) {
+  const messages = Array.isArray(messagesProp) ? messagesProp : [];
+  const safeContext = Array.isArray(contextMessages) ? contextMessages : [];
+
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+  const handleSend = async (event) => {
+    event.preventDefault();
 
-    const userMessage = {
-      id: Date.now(),
-      role: "user",
-      content: input.trim()
-    };
+    const text = input.trim();
 
-    const updatedMessages = [...messages, userMessage];
+    if (!text || isLoading || typeof setMessages !== "function") {
+      return;
+    }
+
+    const updatedMessages = [
+      ...messages,
+      { role: "user", content: text },
+    ];
 
     setMessages(updatedMessages);
     setInput("");
+    setError("");
     setIsLoading(true);
 
     try {
-      const response = await fetch(
-        "http://localhost:3001/api/chat",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            concept,
-            originalQuestion,
-            sourceMessage,
-            contextMessages,
-            conversation: updatedMessages
-          })
-        }
-      );
+      const conversation = updatedMessages
+        .slice(-MAX_MESSAGES)
+        .map(({ role, content }) => ({
+          role,
+          content: String(content || "").slice(0, MAX_MESSAGE_LENGTH),
+        }));
+
+      const limitedContext = safeContext
+        .slice(-3)
+        .map(({ role, content }) => ({
+          role,
+          content: String(content || "").slice(0, MAX_MESSAGE_LENGTH),
+        }));
+
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "subchat",
+          concept: String(concept).slice(0, 200),
+          originalQuestion: String(originalQuestion).slice(0, 500),
+          sourceMessage: String(sourceMessage).slice(0, 2500),
+          contextMessages: limitedContext,
+          conversation,
+        }),
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.details ||
-          data.error ||
-          `Server error: ${response.status}`
-        );
+        const message =
+          typeof data.error === "string"
+            ? data.error
+            : data.error?.message;
+
+        throw new Error(message || `Request failed (${response.status}).`);
       }
 
-      if (!data.reply) {
-        throw new Error("The API returned an empty response.");
+      if (typeof data.reply !== "string" || !data.reply.trim()) {
+        throw new Error("The AI returned an empty response.");
       }
 
+      // Pass an actual array to the parent, never a function.
       setMessages([
         ...updatedMessages,
-        {
-          id: Date.now() + 1,
-          role: "assistant",
-          content: data.reply
-        }
+        { role: "assistant", content: data.reply },
       ]);
-    } catch (error) {
-      console.error("Subchat request failed:", error);
-
-      setMessages([
-        ...updatedMessages,
-        {
-          id: Date.now() + 1,
-          role: "assistant",
-          content: `Connection error: ${error.message}`
-        }
-      ]);
+    } catch (err) {
+      console.error("Subchat request failed:", err);
+      setError(err.message || "Sorry, I couldn't generate a response.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleKeyDown = (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      handleSend();
-    }
-  };
-
   return (
-    <aside className={`subchat-panel ${isCollapsed ? "collapsed" : ""}`}>
+    <section className="subchat-panel">
       <div className="subchat-header">
-        <button
-          className="subchat-heading-button"
-          onClick={onToggleCollapsed}
-          aria-expanded={!isCollapsed}
-          title={isCollapsed ? "Expand Subchat" : "Collapse Subchat"}
-        >
-          <span className="collapse-indicator">
-            {isCollapsed ? "▸" : "▾"}
-          </span>
+        <div className="subchat-heading">
+          <span className="subchat-icon" aria-hidden="true">↗</span>
+          <div>
+            <div className="subchat-title">Subchat</div>
+            <div className="subchat-concept">Exploring: {concept}</div>
+          </div>
+        </div>
 
-          <span className="subchat-heading-text">
-            <span className="subchat-title">Subchat</span>
-            <span className="subchat-subtitle">
-              {concept.length > 35 ? `${concept.slice(0, 35)}…` : concept}
-            </span>
-          </span>
-        </button>
-
-        <div className="subchat-header-actions">
+        <div className="subchat-controls">
           <button
-            className="collapse-button"
+            type="button"
             onClick={onToggleCollapsed}
-            title={isCollapsed ? "Expand Subchat" : "Collapse Subchat"}
             aria-label={isCollapsed ? "Expand Subchat" : "Collapse Subchat"}
           >
-            {isCollapsed ? "□" : "−"}
+            {isCollapsed ? "＋" : "−"}
           </button>
-
-          <button
-            className="close-button"
-            onClick={onClose}
-            title="Close Subchat"
-            aria-label="Close Subchat"
-          >
+          <button type="button" onClick={onClose} aria-label="Close Subchat">
             ×
           </button>
         </div>
@@ -177,85 +161,86 @@ function Subchat({
 
       {!isCollapsed && (
         <>
-          <div className="subchat-context">
-            <div className="context-label">EXPLORING</div>
-            <div className="context-concept">"{concept}"</div>
+          <details className="inherited-context">
+            <summary>View original context</summary>
 
-            <details className="inherited-context" open>
-              <summary>Relevant conversation context</summary>
-
-              <div className="inherited-context-messages">
-                {contextMessages.length > 0 ? (
-                  contextMessages.map((message, index) => (
-                    <div
-                      key={`${index}-${message.role}`}
-                      className="inherited-context-message"
-                    >
-                      <span className="context-heading">
-                        {message.role === "user" ? "You" : "AI"}
-                      </span>
-                      <p>{message.content}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p>{sourceMessage}</p>
-                )}
+            {originalQuestion && (
+              <div className="context-block">
+                <strong>Original question</strong>
+                <p>{originalQuestion}</p>
               </div>
-            </details>
+            )}
 
-            <div className="context-section">
-              <div className="context-heading">Relevant user question</div>
-              <p>{originalQuestion || "No earlier question available."}</p>
-            </div>
-          </div>
+            {sourceMessage && (
+              <div className="context-block">
+                <strong>Selected response</strong>
+                <FormattedResponse content={sourceMessage} />
+              </div>
+            )}
+
+            {safeContext.length > 0 && (
+              <div className="context-block">
+                <strong>Earlier conversation</strong>
+                {safeContext.slice(-3).map((message, index) => (
+                  <div className="context-message" key={`${message.role}-${index}`}>
+                    <strong>{message.role === "user" ? "You" : "AI"}</strong>
+                    <p>{String(message.content || "")}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </details>
 
           <div className="subchat-messages">
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <div
-                key={message.id}
                 className={`subchat-message ${message.role}`}
+                key={`${message.role}-${index}`}
               >
-                <div className="message-label">
+                <div className="subchat-message-label">
                   {message.role === "user" ? "You" : "AI"}
                 </div>
 
-                {message.role === "assistant" &&
-                  !message.content.startsWith("Connection error:") ? (
+                {message.role === "assistant" ? (
                   <FormattedResponse content={message.content} />
                 ) : (
-                  <p>{message.content}</p>
+                  <div className="subchat-user-content">
+                    {String(message.content || "")}
+                  </div>
                 )}
               </div>
             ))}
 
             {isLoading && (
-              <div className="subchat-message assistant">
-                <div className="message-label">AI</div>
-                <p>Thinking...</p>
+              <div className="subchat-thinking">AI is thinking...</div>
+            )}
+
+            {error && (
+              <div className="subchat-error" role="alert">
+                <p>{error}</p>
+                <button type="button" onClick={() => setError("")}>
+                  Dismiss
+                </button>
               </div>
             )}
           </div>
 
-          <div className="subchat-input">
+          <form className="subchat-input" onSubmit={handleSend}>
             <input
               type="text"
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              onKeyDown={handleKeyDown}
+              placeholder={`Ask about ${concept}...`}
+              aria-label="Ask a Subchat question"
               disabled={isLoading}
-              placeholder={`Ask about "${concept}"...`}
             />
-
-            <button
-              onClick={handleSend}
-              disabled={isLoading || !input.trim()}
-            >
-              {isLoading ? "..." : "Send"}
+            <button type="submit" disabled={isLoading || !input.trim()}>
+              {isLoading ? "Thinking..." : "Send"}
             </button>
-          </div>
+          </form>
         </>
       )}
-    </aside>
+    </section>
   );
 }
 
