@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -6,21 +6,37 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
 function formatMarkdown(text = "") {
-    return text
-        .replace(/\\([#*_|])/g, "$1")
-        .replace(/\\\[([\\s\\S]*?)\\\]/g, (_, math) => `\n$$\n${math}\n$$\n`)
-        .replace(/\\\(([\\s\\S]*?)\\\)/g, (_, math) => `$${math}$`)
-        .replace(/\\([`~])/g, "$1");
+    let formatted = text;
+
+    // Convert escaped LaTeX delimiters to Markdown math delimiters.
+    formatted = formatted
+        .replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `\n$$\n${math.trim()}\n$$\n`)
+        .replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`);
+
+    // Convert common plain square-bracket equation blocks into display math.
+    formatted = formatted.replace(
+        /^\s*\[\s*((?=[\s\S]*?(?:\\(?:frac|sum|sigma|cdot|mathbf|text|sqrt|int|alpha|beta|theta|pi|times|infty|begin|left|right)|[_^=]))[\s\S]*?)\s*\]\s*$/gm,
+        (_, math) => `\n$$\n${math.trim()}\n$$\n`
+    );
+
+    // Remove escaping used for ordinary Markdown punctuation without
+    // stripping backslashes from LaTeX commands.
+    formatted = formatted.replace(/\\([#*_|`~])/g, "$1");
+
+    return formatted;
 }
 
 function CopyButton({ text, className = "" }) {
     const [copied, setCopied] = useState(false);
 
     const handleCopy = useCallback(() => {
-        navigator.clipboard.writeText(text).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        });
+        navigator.clipboard
+            .writeText(text)
+            .then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            })
+            .catch(() => { });
     }, [text]);
 
     return (
@@ -32,11 +48,31 @@ function CopyButton({ text, className = "" }) {
             aria-label={copied ? "Copied" : "Copy to clipboard"}
         >
             {copied ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                >
                     <path d="M20 6 9 17l-5-5" />
                 </svg>
             ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                >
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                 </svg>
@@ -63,12 +99,14 @@ function CodeBlock({ className, children }) {
     );
 }
 
-function Message({ id, role, content, onTextSelect }) {
+function Message({ id, role, content = "", onTextSelect }) {
     const [hovering, setHovering] = useState(false);
     const [copiedMsg, setCopiedMsg] = useState(false);
 
+    const formattedContent = useMemo(() => formatMarkdown(content), [content]);
+
     const handleMouseUp = () => {
-        if (role !== "assistant") return;
+        if (role !== "assistant" || !onTextSelect) return;
 
         const selection = window.getSelection();
         const selectedText = selection?.toString().trim();
@@ -86,24 +124,25 @@ function Message({ id, role, content, onTextSelect }) {
                 top: rect.top,
                 left: rect.left,
                 bottom: rect.bottom,
-                right: rect.right
-            }
+                right: rect.right,
+            },
         });
     };
 
     const handleCopyMessage = () => {
-        navigator.clipboard.writeText(content).then(() => {
-            setCopiedMsg(true);
-            setTimeout(() => setCopiedMsg(false), 2000);
-        });
+        navigator.clipboard
+            .writeText(content)
+            .then(() => {
+                setCopiedMsg(true);
+                setTimeout(() => setCopiedMsg(false), 2000);
+            })
+            .catch(() => { });
     };
 
     if (role === "user") {
         return (
             <div className="message-row user-row" id={id ? `msg-${id}` : undefined}>
-                <div className="user-bubble">
-                    {content}
-                </div>
+                <div className="user-bubble">{content}</div>
             </div>
         );
     }
@@ -117,7 +156,12 @@ function Message({ id, role, content, onTextSelect }) {
         >
             <div className="assistant-avatar">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M12 3.5 14.4 9.6 20.5 12l-6.1 2.4L12 20.5l-2.4-6.1L3.5 12l6.1-2.4L12 3.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                    <path
+                        d="M12 3.5 14.4 9.6 20.5 12l-6.1 2.4L12 20.5l-2.4-6.1L3.5 12l6.1-2.4L12 3.5Z"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinejoin="round"
+                    />
                 </svg>
             </div>
 
@@ -137,38 +181,44 @@ function Message({ id, role, content, onTextSelect }) {
                             ),
                             pre: ({ children }) => <>{children}</>,
                             code: ({ node: _node, className, children, ...props }) => {
-                                const isInline = !className && typeof children === "string" && !children.includes("\n");
+                                const isInline =
+                                    !className &&
+                                    typeof children === "string" &&
+                                    !children.includes("\n");
+
                                 if (isInline) {
-                                    return <code className="inline-code" {...props}>{children}</code>;
+                                    return (
+                                        <code className="inline-code" {...props}>
+                                            {children}
+                                        </code>
+                                    );
                                 }
-                                return <CodeBlock className={className}>{children}</CodeBlock>;
-                            }
+
+                                return (
+                                    <CodeBlock className={className}>
+                                        {children}
+                                    </CodeBlock>
+                                );
+                            },
                         }}
                     >
-                        {formatMarkdown(content)}
+                        {formattedContent}
                     </ReactMarkdown>
                 </div>
 
-                <div className={`message-actions ${hovering ? "visible" : ""}`}>
-                    <button
-                        type="button"
-                        className="action-btn"
-                        onClick={handleCopyMessage}
-                        title={copiedMsg ? "Copied!" : "Copy"}
-                    >
-                        {copiedMsg ? (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                        ) : (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                        )}
-                    </button>
-                    <button type="button" className="action-btn" title="Good response">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 10v12" /><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z" /></svg>
-                    </button>
-                    <button type="button" className="action-btn" title="Bad response">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 14V2" /><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z" /></svg>
-                    </button>
-                </div>
+                {/* Message Action Toolbar (shows on hover or when copied) */}
+                {(hovering || copiedMsg) && (
+                    <div className="message-actions">
+                        <button
+                            type="button"
+                            className="copy-msg-btn"
+                            onClick={handleCopyMessage}
+                            aria-label="Copy entire message"
+                        >
+                            {copiedMsg ? "Copied!" : "Copy"}
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );
