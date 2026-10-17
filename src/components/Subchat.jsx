@@ -5,7 +5,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
-const API_URL = "http://localhost:3001/api/chat";
+const API_URL = "/api/chat";
 const MAX_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 1500;
 
