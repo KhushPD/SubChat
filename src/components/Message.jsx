@@ -4,27 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-
-function formatMarkdown(text = "") {
-    let formatted = text;
-
-    // Convert escaped LaTeX delimiters to Markdown math delimiters.
-    formatted = formatted
-        .replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `\n$$\n${math.trim()}\n$$\n`)
-        .replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`);
-
-    // Convert common plain square-bracket equation blocks into display math.
-    formatted = formatted.replace(
-        /^\s*\[\s*((?=[\s\S]*?(?:\\(?:frac|sum|sigma|cdot|mathbf|text|sqrt|int|alpha|beta|theta|pi|times|infty|begin|left|right)|[_^=]))[\s\S]*?)\s*\]\s*$/gm,
-        (_, math) => `\n$$\n${math.trim()}\n$$\n`
-    );
-
-    // Remove escaping used for ordinary Markdown punctuation without
-    // stripping backslashes from LaTeX commands.
-    formatted = formatted.replace(/\\([#*_|`~])/g, "$1");
-
-    return formatted;
-}
+import { formatMarkdown } from "../utils/markdown.js";
 
 function CopyButton({ text, className = "" }) {
     const [copied, setCopied] = useState(false);
@@ -79,6 +59,24 @@ function CopyButton({ text, className = "" }) {
             )}
         </button>
     );
+}
+
+function renderWithBreaks(child) {
+    if (typeof child === "string" && /<br\s*\/?>/i.test(child)) {
+        const parts = child.split(/<br\s*\/?>/i);
+        return parts.map((part, i) => (
+            <span key={i}>
+                {i > 0 && <br />}
+                {part}
+            </span>
+        ));
+    }
+    if (Array.isArray(child)) {
+        return child.map((item, idx) => (
+            <span key={idx}>{renderWithBreaks(item)}</span>
+        ));
+    }
+    return child;
 }
 
 function CodeBlock({ className, children }) {
@@ -178,6 +176,15 @@ function Message({ id, role, content = "", onTextSelect }) {
                                 <div className="markdown-table-wrapper">
                                     <table {...props} />
                                 </div>
+                            ),
+                            td: ({ node: _node, children, ...props }) => (
+                                <td {...props}>{renderWithBreaks(children)}</td>
+                            ),
+                            th: ({ node: _node, children, ...props }) => (
+                                <th {...props}>{renderWithBreaks(children)}</th>
+                            ),
+                            p: ({ node: _node, children, ...props }) => (
+                                <p {...props}>{renderWithBreaks(children)}</p>
                             ),
                             pre: ({ children }) => <>{children}</>,
                             code: ({ node: _node, className, children, ...props }) => {

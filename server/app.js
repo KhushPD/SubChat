@@ -89,7 +89,8 @@ Answer the user's latest question directly and accurately.
 Use previous messages when relevant.
 Explain unfamiliar concepts clearly and provide examples when useful.
 Use standard Markdown for headings, lists, tables, and code.
-Use $...$ for inline math and $$...$$ for display equations.
+Use $...$ for inline math and $$...$$ on their own lines for display equations (e.g. $$a = \\sigma(\\mathbf{w}\\cdot\\mathbf{x} + b)$$).
+Do not use raw brackets [ ... ] for equations.
 Do not unnecessarily escape Markdown.
 Be helpful and appropriately detailed.
 `;
@@ -146,7 +147,8 @@ HOW TO RESPOND
 FORMATTING
 - Use standard Markdown where helpful.
 - Use concise headings and lists when they improve readability.
-- Use $...$ for inline mathematics and $$...$$ for display equations.
+- Use $...$ for inline mathematics and $$...$$ on their own lines for display equations.
+- Do not use raw brackets [ ... ] for equations.
 - Format code using fenced code blocks with an appropriate language.
 - Do not wrap the entire response in a code block.
 - Avoid unnecessary repetition and excessive headings.

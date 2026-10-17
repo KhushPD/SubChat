@@ -941,10 +941,71 @@ a {
   border-radius: var(--radius-sm);
 }
 
+.markdown-content blockquote {
+  margin: 14px 0;
+  padding: 8px 16px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-hover);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+}
+
+.markdown-content blockquote p {
+  margin: 4px 0;
+}
+
+.markdown-content hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 20px 0;
+}
+
+.markdown-content .katex {
+  font-size: 1.05em;
+  color: inherit;
+  text-rendering: geometricPrecision;
+}
+
 .markdown-content .katex-display {
+  display: block;
+  margin: 14px 0;
+  padding: 10px 0;
   max-width: 100%;
-  overflow: auto hidden;
-  padding: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) transparent;
+}
+
+.markdown-content .katex-display > .katex {
+  display: inline-block;
+  font-size: 1.15em;
+  text-align: initial;
+  white-space: nowrap;
+}
+
+.markdown-content .katex-display::-webkit-scrollbar {
+  height: 4px;
+}
+
+.markdown-content .katex-display::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.markdown-content .katex-display::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 2px;
+}
+
+.markdown-content .katex-display::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.katex .frac-line,
+.katex .sqrt-line {
+  border-bottom-color: currentColor !important;
 }
 
 .markdown-content input[type="checkbox"] {

@@ -1,23 +1,36 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import { formatMarkdown } from "../utils/markdown.js";
 
 const API_URL = "/api/chat";
 const MAX_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 1500;
 
-function formatMarkdown(text = "") {
-  return String(text)
-    .replace(/\\([#*_|])/g, "$1")
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `\n$$\n${math}\n$$\n`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`)
-    .replace(/\\([`~])/g, "$1");
+function renderWithBreaks(child) {
+  if (typeof child === "string" && /<br\s*\/?>/i.test(child)) {
+    const parts = child.split(/<br\s*\/?>/i);
+    return parts.map((part, i) => (
+      <span key={i}>
+        {i > 0 && <br />}
+        {part}
+      </span>
+    ));
+  }
+  if (Array.isArray(child)) {
+    return child.map((item, idx) => (
+      <span key={idx}>{renderWithBreaks(item)}</span>
+    ));
+  }
+  return child;
 }
 
 function FormattedResponse({ content }) {
+  const formattedContent = useMemo(() => formatMarkdown(content), [content]);
+
   return (
     <div className="markdown-content">
       <ReactMarkdown
@@ -32,9 +45,18 @@ function FormattedResponse({ content }) {
               <table {...props} />
             </div>
           ),
+          td: ({ node: _node, children, ...props }) => (
+            <td {...props}>{renderWithBreaks(children)}</td>
+          ),
+          th: ({ node: _node, children, ...props }) => (
+            <th {...props}>{renderWithBreaks(children)}</th>
+          ),
+          p: ({ node: _node, children, ...props }) => (
+            <p {...props}>{renderWithBreaks(children)}</p>
+          ),
         }}
       >
-        {formatMarkdown(content)}
+        {formattedContent}
       </ReactMarkdown>
     </div>
   );
