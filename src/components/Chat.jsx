@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Message from "./Message";
 import ChatInput from "./ChatInput";
 import Subchat from "./Subchat";
@@ -15,7 +15,6 @@ function createChat(title = "New Chat") {
         title,
         messages: [],
         subchats: [],
-        pinned: false,
     };
 }
 
@@ -44,7 +43,6 @@ function loadChats() {
                     .map((chat) => ({
                         ...chat,
                         title: chat.title || "New Chat",
-                        pinned: Boolean(chat.pinned),
                         messages: isValidMessages(chat.messages)
                             ? chat.messages
                             : [],
@@ -70,7 +68,8 @@ function loadChats() {
                                     isCollapsed: Boolean(subchat.isCollapsed),
                                 }))
                             : [],
-                    }));
+                    }))
+                    .filter((chat) => chat.messages && chat.messages.length > 0);
 
                 if (validChats.length > 0) return validChats;
             }
@@ -85,30 +84,30 @@ function loadChats() {
             localStorage.getItem(OLD_SUBCHATS_KEY) || "[]"
         );
 
-        const initialChat = createChat(
-            Array.isArray(oldMessages) && oldMessages.length > 0
-                ? String(
+        if (Array.isArray(oldMessages) && oldMessages.length > 0 && isValidMessages(oldMessages)) {
+            const initialChat = createChat(
+                String(
                     oldMessages.find((message) => message.role === "user")
                         ?.content || "Previous Chat"
                 ).slice(0, 40)
-                : "New Chat"
-        );
+            );
 
-        initialChat.messages = isValidMessages(oldMessages)
-            ? oldMessages
-            : [];
+            initialChat.messages = oldMessages;
 
-        initialChat.subchats = Array.isArray(oldSubchats)
-            ? oldSubchats.filter(
-                (subchat) =>
-                    subchat &&
-                    subchat.id !== undefined &&
-                    typeof subchat.concept === "string" &&
-                    Array.isArray(subchat.messages)
-            )
-            : [];
+            initialChat.subchats = Array.isArray(oldSubchats)
+                ? oldSubchats.filter(
+                    (subchat) =>
+                        subchat &&
+                        subchat.id !== undefined &&
+                        typeof subchat.concept === "string" &&
+                        Array.isArray(subchat.messages)
+                )
+                : [];
 
-        return [initialChat];
+            return [initialChat];
+        }
+
+        return [createChat()];
     } catch (error) {
         console.error("Could not restore chat history:", error);
         return [createChat()];
@@ -123,38 +122,90 @@ function loadActiveChatId() {
     }
 }
 
-function Chat() {
-    const [chats, setChats] = useState(loadChats);
-    const [activeChatId, setActiveChatId] = useState(loadActiveChatId);
-    const [pendingSelection, setPendingSelection] = useState(null);
-    const [isSending, setIsSending] = useState(false);
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-    const [deleteConfirmation, setDeleteConfirmation] = useState(null);
-    const [theme, setTheme] = useState(() => {
-        try {
-            return localStorage.getItem("subchat-theme") === "dark" ? "dark" : "light";
-        } catch {
-            return "light";
+function getInitialActiveChatId(chats) {
+    const saved = loadActiveChatId();
+    if (saved && chats.some((chat) => chat.id === saved)) {
+        return saved;
+    }
+    return chats.length > 0 ? chats[chats.length - 1].id : null;
+}
+
+/** Categorize chats into time buckets like ChatGPT */
+function categorizeChatsByDate(chats) {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const buckets = {
+        today: [],
+        yesterday: [],
+        previous7: [],
+        older: [],
+    };
+
+    [...chats].reverse().forEach((chat) => {
+        // Extract timestamp from id (format: timestamp-randomstring)
+        const ts = parseInt(chat.id.split("-")[0], 10);
+        const chatDate = new Date(ts);
+
+        if (chatDate >= today) {
+            buckets.today.push(chat);
+        } else if (chatDate >= yesterday) {
+            buckets.yesterday.push(chat);
+        } else if (chatDate >= sevenDaysAgo) {
+            buckets.previous7.push(chat);
+        } else {
+            buckets.older.push(chat);
         }
     });
 
+    return buckets;
+}
+
+function Chat() {
+    const [chats, setChats] = useState(loadChats);
+    const [activeChatId, setActiveChatId] = useState(() => getInitialActiveChatId(chats));
+    const [pendingSelection, setPendingSelection] = useState(null);
+    const [isSending, setIsSending] = useState(false);
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [subchatHidden, setSubchatHidden] = useState(false);
+    const [closingSubchatIds, setClosingSubchatIds] = useState([]);
+    const [isClosingStack, setIsClosingStack] = useState(false);
+    const [deleteConfirmation, setDeleteConfirmation] = useState(null);
+    const [renamingChatId, setRenamingChatId] = useState(null);
+    const [renameValue, setRenameValue] = useState("");
+    const [menuOpenChatId, setMenuOpenChatId] = useState(null);
+    const pendingScrollPromptIdRef = useRef(null);
+
     const activeChat =
-        chats.find((chat) => chat.id === activeChatId) || chats[0];
+        chats.find((chat) => chat.id === activeChatId) ||
+        chats[chats.length - 1] ||
+        chats[0];
 
     const messages = activeChat?.messages || [];
     const subchats = activeChat?.subchats || [];
 
+    // When writing a prompt, scroll to the prompt at the top so user stays at the start of the generated answer
     useEffect(() => {
-        try {
-            localStorage.setItem("subchat-theme", theme);
-        } catch (error) {
-            console.error("Could not save theme preference:", error);
+        if (pendingScrollPromptIdRef.current) {
+            const promptId = pendingScrollPromptIdRef.current;
+            const el = document.getElementById(`msg-${promptId}`);
+            if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+                pendingScrollPromptIdRef.current = null;
+            }
         }
-    }, [theme]);
+    }, [messages.length]);
 
     useEffect(() => {
         try {
-            localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
+            const chatsToSave = chats.filter(
+                (chat) => chat.messages && chat.messages.length > 0
+            );
+            localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chatsToSave));
         } catch (error) {
             console.error("Could not save chat history:", error);
         }
@@ -163,16 +214,16 @@ function Chat() {
     useEffect(() => {
         if (!activeChat) return;
 
-        if (activeChatId !== activeChat.id) {
-            setActiveChatId(activeChat.id);
-        }
-
         try {
-            localStorage.setItem(ACTIVE_CHAT_KEY, activeChat.id);
+            if (activeChat.messages && activeChat.messages.length > 0) {
+                localStorage.setItem(ACTIVE_CHAT_KEY, activeChat.id);
+            } else {
+                localStorage.removeItem(ACTIVE_CHAT_KEY);
+            }
         } catch (error) {
             console.error("Could not save active chat:", error);
         }
-    }, [activeChat, activeChatId]);
+    }, [activeChat]);
 
     useEffect(() => {
         const dismissSelection = (event) => {
@@ -193,6 +244,14 @@ function Chat() {
         };
     }, []);
 
+    // Close menu on outside click
+    useEffect(() => {
+        if (!menuOpenChatId) return;
+        const handleClick = () => setMenuOpenChatId(null);
+        window.addEventListener("click", handleClick);
+        return () => window.removeEventListener("click", handleClick);
+    }, [menuOpenChatId]);
+
     const updateChat = (chatId, updater) => {
         setChats((previous) =>
             previous.map((chat) =>
@@ -204,10 +263,23 @@ function Chat() {
     const handleNewChat = () => {
         if (isSending) return;
 
+        // If currently already on an unstarted chat (0 messages), just remain on it
+        if (activeChat && (!activeChat.messages || activeChat.messages.length === 0)) {
+            setSubchatHidden(false);
+            setPendingSelection(null);
+            window.getSelection()?.removeAllRanges();
+            return;
+        }
+
         const newChat = createChat();
 
-        setChats((previous) => [...previous, newChat]);
+        // Prune any existing unstarted chats and add the new empty chat
+        setChats((previous) => [
+            ...previous.filter((chat) => chat.messages && chat.messages.length > 0),
+            newChat,
+        ]);
         setActiveChatId(newChat.id);
+        setSubchatHidden(false);
         setPendingSelection(null);
         window.getSelection()?.removeAllRanges();
     };
@@ -215,21 +287,21 @@ function Chat() {
     const handleSelectChat = (chatId) => {
         if (isSending || chatId === activeChat?.id) return;
 
+        // Discard any unstarted chats when switching to an existing chat
+        setChats((previous) =>
+            previous.filter(
+                (chat) => chat.id === chatId || (chat.messages && chat.messages.length > 0)
+            )
+        );
         setActiveChatId(chatId);
+        setSubchatHidden(false);
         setPendingSelection(null);
         window.getSelection()?.removeAllRanges();
     };
 
-    const handleToggleTheme = () => {
-        setTheme((currentTheme) => currentTheme === "light" ? "dark" : "light");
-    };
-
-    const handleTogglePin = (chatId) => {
-        updateChat(chatId, (chat) => ({ ...chat, pinned: !chat.pinned }));
-    };
-
     const requestDeleteChat = (chat) => {
         setDeleteConfirmation({ id: chat.id, title: chat.title || "New Chat" });
+        setMenuOpenChatId(null);
     };
 
     const cancelDeleteChat = () => setDeleteConfirmation(null);
@@ -239,18 +311,55 @@ function Chat() {
 
         const deletedChatId = deleteConfirmation.id;
         const remainingChats = chats.filter((chat) => chat.id !== deletedChatId);
-        const nextChats = remainingChats.length > 0 ? remainingChats : [createChat()];
+        const startedRemainingChats = remainingChats.filter(
+            (chat) => chat.messages && chat.messages.length > 0
+        );
+
+        let nextChats;
+        let nextActiveChatId;
+
+        const activeWasUnstarted =
+            activeChat &&
+            activeChat.id !== deletedChatId &&
+            (!activeChat.messages || activeChat.messages.length === 0);
+
+        if (activeWasUnstarted) {
+            nextChats = [...startedRemainingChats, activeChat];
+            nextActiveChatId = activeChat.id;
+        } else if (startedRemainingChats.length > 0) {
+            nextChats = startedRemainingChats;
+            if (activeChatId === deletedChatId) {
+                nextActiveChatId =
+                    startedRemainingChats[startedRemainingChats.length - 1].id;
+            } else {
+                nextActiveChatId = activeChatId;
+            }
+        } else {
+            const freshChat = createChat();
+            nextChats = [freshChat];
+            nextActiveChatId = freshChat.id;
+        }
 
         setChats(nextChats);
-        if (activeChatId === deletedChatId) {
-            const nextActiveChat = remainingChats.length > 0
-                ? remainingChats[remainingChats.length - 1]
-                : nextChats[0];
-            setActiveChatId(nextActiveChat.id);
-        }
+        setActiveChatId(nextActiveChatId);
         if (pendingSelection?.chatId === deletedChatId) setPendingSelection(null);
         setDeleteConfirmation(null);
+        setSubchatHidden(false);
         window.getSelection()?.removeAllRanges();
+    };
+
+    const handleStartRename = (chat) => {
+        setRenamingChatId(chat.id);
+        setRenameValue(chat.title || "");
+        setMenuOpenChatId(null);
+    };
+
+    const handleConfirmRename = () => {
+        if (renamingChatId && renameValue.trim()) {
+            updateChat(renamingChatId, (chat) => ({ ...chat, title: renameValue.trim() }));
+        }
+        setRenamingChatId(null);
+        setRenameValue("");
     };
 
     const handleMainSend = async (text) => {
@@ -263,6 +372,8 @@ function Chat() {
             role: "user",
             content: text.trim(),
         };
+
+        pendingScrollPromptIdRef.current = userMessage.id;
 
         const updatedMessages = [...messages, userMessage];
 
@@ -404,17 +515,45 @@ function Chat() {
             subchats: [...chat.subchats, newSubchat],
         }));
 
+        setSubchatHidden(false);
         setPendingSelection(null);
         window.getSelection()?.removeAllRanges();
     };
 
     const closeSubchat = (id) => {
-        if (!activeChat) return;
+        if (!activeChat || closingSubchatIds.includes(id)) return;
 
-        updateChat(activeChat.id, (chat) => ({
-            ...chat,
-            subchats: chat.subchats.filter((subchat) => subchat.id !== id),
-        }));
+        const chatIdToUpdate = activeChat.id;
+        const isLastSubchat = subchats.length <= 1;
+
+        setClosingSubchatIds((current) => [...current, id]);
+        if (isLastSubchat) {
+            setIsClosingStack(true);
+        }
+
+        // Let the closing animation finish before removing the panel from React.
+        window.setTimeout(() => {
+            updateChat(chatIdToUpdate, (chat) => ({
+                ...chat,
+                subchats: chat.subchats.filter((subchat) => subchat.id !== id),
+            }));
+
+            setClosingSubchatIds((current) => current.filter((closingId) => closingId !== id));
+            setIsClosingStack(false);
+
+            if (isLastSubchat && activeChatId === chatIdToUpdate) {
+                setSubchatHidden(false);
+            }
+        }, 360);
+    };
+
+    const handleHideSubchat = () => {
+        if (isClosingStack || subchatHidden) return;
+        setIsClosingStack(true);
+        window.setTimeout(() => {
+            setSubchatHidden(true);
+            setIsClosingStack(false);
+        }, 360);
     };
 
     const updateSubchatMessages = (chatId, subchatId, newMessages) => {
@@ -456,145 +595,280 @@ function Chat() {
         )
         : 0;
 
-    return (
-        <div className={`chat-layout theme-${theme} ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`} data-theme={theme}>
-            <aside className={`history-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
-                <div className="sidebar-top">
-                    {!sidebarCollapsed && (
-                        <div className="sidebar-brand">
-                            <span className="brand-mark">S</span>
-                            <span>Subchat</span>
-                        </div>
-                    )}
+    const historyChats = chats.filter(
+        (chat) => chat.messages && chat.messages.length > 0
+    );
+    const dateBuckets = categorizeChatsByDate(historyChats);
 
+    return (
+        <div className={`chat-layout ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+            {/* ===== SIDEBAR ===== */}
+            <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+                <div className="sidebar-top">
                     <button
                         type="button"
-                        className="sidebar-toggle"
-                        onClick={() => setSidebarCollapsed((value) => !value)}
-                        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                        className="sidebar-toggle-btn"
+                        onClick={() => setSidebarCollapsed((v) => !v)}
+                        title={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}
+                        aria-label={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}
                     >
-                        {sidebarCollapsed ? "☰" : "‹"}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <path d="M9 3v18" />
+                        </svg>
                     </button>
+
+                    {!sidebarCollapsed && (
+                        <button
+                            type="button"
+                            className="sidebar-new-chat-btn"
+                            onClick={handleNewChat}
+                            disabled={isSending}
+                            title="New chat"
+                            aria-label="New chat"
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M12 20h9" />
+                                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                            </svg>
+                        </button>
+                    )}
                 </div>
 
-                <button
-                    type="button"
-                    className="sidebar-new-chat"
-                    onClick={handleNewChat}
-                    disabled={isSending}
-                    title="New Chat"
-                >
-                    <span className="new-chat-symbol">＋</span>
-                    {!sidebarCollapsed && <span>New Chat</span>}
-                </button>
-
                 {!sidebarCollapsed && (
-                    <>
-                        {chats.some((chat) => chat.pinned) && (
-                            <>
-                                <div className="sidebar-section-label">PINNED</div>
-                                <div className="chat-history-list">
-                                    {[...chats].filter((chat) => chat.pinned).reverse().map((chat) => (
-                                        <ChatHistoryItem
-                                            key={chat.id}
-                                            chat={chat}
-                                            active={chat.id === activeChat?.id}
-                                            disabled={isSending}
-                                            onSelect={() => handleSelectChat(chat.id)}
-                                            onTogglePin={() => handleTogglePin(chat.id)}
-                                            onDelete={() => requestDeleteChat(chat)}
-                                        />
-                                    ))}
-                                </div>
-                            </>
+                    <div className="sidebar-history">
+                        {dateBuckets.today.length > 0 && (
+                            <div className="history-section">
+                                <div className="history-section-label">Today</div>
+                                {dateBuckets.today.map((chat) => (
+                                    <ChatHistoryItem
+                                        key={chat.id}
+                                        chat={chat}
+                                        active={chat.id === activeChat?.id}
+                                        disabled={isSending}
+                                        isRenaming={renamingChatId === chat.id}
+                                        renameValue={renameValue}
+                                        onRenameChange={setRenameValue}
+                                        onRenameConfirm={handleConfirmRename}
+                                        menuOpen={menuOpenChatId === chat.id}
+                                        onMenuToggle={(e) => {
+                                            e.stopPropagation();
+                                            setMenuOpenChatId(menuOpenChatId === chat.id ? null : chat.id);
+                                        }}
+                                        onSelect={() => handleSelectChat(chat.id)}
+                                        onRename={() => handleStartRename(chat)}
+                                        onDelete={() => requestDeleteChat(chat)}
+                                    />
+                                ))}
+                            </div>
                         )}
 
-                        <div className="sidebar-section-label">YOUR CHATS</div>
-                        <div className="chat-history-list">
-                            {[...chats].filter((chat) => !chat.pinned).reverse().map((chat) => (
-                                <ChatHistoryItem
-                                    key={chat.id}
-                                    chat={chat}
-                                    active={chat.id === activeChat?.id}
-                                    disabled={isSending}
-                                    onSelect={() => handleSelectChat(chat.id)}
-                                    onTogglePin={() => handleTogglePin(chat.id)}
-                                    onDelete={() => requestDeleteChat(chat)}
-                                />
-                            ))}
-                        </div>
+                        {dateBuckets.yesterday.length > 0 && (
+                            <div className="history-section">
+                                <div className="history-section-label">Yesterday</div>
+                                {dateBuckets.yesterday.map((chat) => (
+                                    <ChatHistoryItem
+                                        key={chat.id}
+                                        chat={chat}
+                                        active={chat.id === activeChat?.id}
+                                        disabled={isSending}
+                                        isRenaming={renamingChatId === chat.id}
+                                        renameValue={renameValue}
+                                        onRenameChange={setRenameValue}
+                                        onRenameConfirm={handleConfirmRename}
+                                        menuOpen={menuOpenChatId === chat.id}
+                                        onMenuToggle={(e) => {
+                                            e.stopPropagation();
+                                            setMenuOpenChatId(menuOpenChatId === chat.id ? null : chat.id);
+                                        }}
+                                        onSelect={() => handleSelectChat(chat.id)}
+                                        onRename={() => handleStartRename(chat)}
+                                        onDelete={() => requestDeleteChat(chat)}
+                                    />
+                                ))}
+                            </div>
+                        )}
 
-                        <div className="sidebar-footer">
-                            Contextual exploration, without losing your place.
-                        </div>
-                    </>
+                        {dateBuckets.previous7.length > 0 && (
+                            <div className="history-section">
+                                <div className="history-section-label">Previous 7 Days</div>
+                                {dateBuckets.previous7.map((chat) => (
+                                    <ChatHistoryItem
+                                        key={chat.id}
+                                        chat={chat}
+                                        active={chat.id === activeChat?.id}
+                                        disabled={isSending}
+                                        isRenaming={renamingChatId === chat.id}
+                                        renameValue={renameValue}
+                                        onRenameChange={setRenameValue}
+                                        onRenameConfirm={handleConfirmRename}
+                                        menuOpen={menuOpenChatId === chat.id}
+                                        onMenuToggle={(e) => {
+                                            e.stopPropagation();
+                                            setMenuOpenChatId(menuOpenChatId === chat.id ? null : chat.id);
+                                        }}
+                                        onSelect={() => handleSelectChat(chat.id)}
+                                        onRename={() => handleStartRename(chat)}
+                                        onDelete={() => requestDeleteChat(chat)}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
+                        {dateBuckets.older.length > 0 && (
+                            <div className="history-section">
+                                <div className="history-section-label">Older</div>
+                                {dateBuckets.older.map((chat) => (
+                                    <ChatHistoryItem
+                                        key={chat.id}
+                                        chat={chat}
+                                        active={chat.id === activeChat?.id}
+                                        disabled={isSending}
+                                        isRenaming={renamingChatId === chat.id}
+                                        renameValue={renameValue}
+                                        onRenameChange={setRenameValue}
+                                        onRenameConfirm={handleConfirmRename}
+                                        menuOpen={menuOpenChatId === chat.id}
+                                        onMenuToggle={(e) => {
+                                            e.stopPropagation();
+                                            setMenuOpenChatId(menuOpenChatId === chat.id ? null : chat.id);
+                                        }}
+                                        onSelect={() => handleSelectChat(chat.id)}
+                                        onRename={() => handleStartRename(chat)}
+                                        onDelete={() => requestDeleteChat(chat)}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Bottom user section */}
+                {!sidebarCollapsed && (
+                    <div className="sidebar-user">
+                        <div className="sidebar-user-avatar">S</div>
+                        <span className="sidebar-user-name">SubChat User</span>
+                    </div>
                 )}
             </aside>
 
-            <main className="chat">
-                <div className="chat-topbar">
-                    <div className="chat-topbar-title">
-                        {activeChat?.title || "New Chat"}
-                    </div>
-
-                    <div className="chat-topbar-actions">
+            {/* ===== MAIN ===== */}
+            <main className="main-canvas">
+                {/* Sticky header */}
+                <header className="main-header">
+                    {sidebarCollapsed && (
                         <button
                             type="button"
-                            className="theme-toggle-button"
-                            onClick={handleToggleTheme}
-                            title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-                            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                            className="header-sidebar-toggle"
+                            onClick={() => setSidebarCollapsed(false)}
+                            title="Open sidebar"
+                            aria-label="Open sidebar"
                         >
-                            <Icon name={theme === "light" ? "moon" : "sun"} size={17} />
-                            <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <rect x="3" y="3" width="18" height="18" rx="2" />
+                                <path d="M9 3v18" />
+                            </svg>
+                        </button>
+                    )}
+
+                    <div className="header-model">
+                        <span>SubChat</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="m6 9 6 6 6-6" />
+                        </svg>
+                    </div>
+
+                    <div className="header-actions">
+                        <button
+                            type="button"
+                            className="header-action-btn"
+                            title="Share"
+                            aria-label="Share conversation"
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                                <polyline points="16 6 12 2 8 6" />
+                                <line x1="12" y1="2" x2="12" y2="15" />
+                            </svg>
                         </button>
                         <button
                             type="button"
-                            className="new-chat-button"
+                            className="header-action-btn"
                             onClick={handleNewChat}
                             disabled={isSending}
+                            title="New chat"
+                            aria-label="New chat"
                         >
-                            <span aria-hidden="true">＋</span> New Chat
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M12 20h9" />
+                                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                            </svg>
                         </button>
+                    </div>
+                </header>
+
+                {/* Message stream */}
+                <div className="message-stream">
+                    <div className="message-stream-inner">
+                        {messages.length === 0 && !isSending && (
+                            <div className="empty-state">
+                                <div className="empty-logo">
+                                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 3.5 14.4 9.6 20.5 12l-6.1 2.4L12 20.5l-2.4-6.1L3.5 12l6.1-2.4L12 3.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                                    </svg>
+                                </div>
+                                <h1 className="empty-heading">What can I help with?</h1>
+                                <div className="empty-prompts">
+                                    <button type="button" onClick={() => handleMainSend("Explain a complex idea in simple terms, with an example.")} disabled={isSending}>
+                                        Explain a complex idea simply
+                                    </button>
+                                    <button type="button" onClick={() => handleMainSend("Help me brainstorm creative ideas for a project.")} disabled={isSending}>
+                                        Brainstorm creative ideas
+                                    </button>
+                                    <button type="button" onClick={() => handleMainSend("Teach me something surprising about how the world works.")} disabled={isSending}>
+                                        Teach me something new
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {messages.map((message) => (
+                            <Message
+                                key={message.id}
+                                id={message.id}
+                                role={message.role}
+                                content={message.content}
+                                onTextSelect={handleTextSelect}
+                            />
+                        ))}
+
+                        {isSending && (
+                            <div className="message-row assistant-row">
+                                <div className="assistant-avatar">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 3.5 14.4 9.6 20.5 12l-6.1 2.4L12 20.5l-2.4-6.1L3.5 12l6.1-2.4L12 3.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                                    </svg>
+                                </div>
+                                <div className="assistant-content">
+                                    <div className="typing-indicator">
+                                        <span></span>
+                                        <span></span>
+                                        <span></span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                <div className="messages">
-                    {messages.length === 0 && !isSending && (
-                        <div className="empty-chat">
-                            <h2>What would you like to explore?</h2>
-                            <p>
-                                Ask a question, then select a phrase in the AI response
-                                to explore it in a separate Subchat.
-                            </p>
-                        </div>
-                    )}
-
-                    {messages.map((message) => (
-                        <Message
-                            key={message.id}
-                            id={message.id}
-                            role={message.role}
-                            content={message.content}
-                            onTextSelect={handleTextSelect}
-                        />
-                    ))}
-
-                    {isSending && (
-                        <div className="message assistant">
-                            <div className="message-label">AI</div>
-                            <div className="message-content">Thinking...</div>
-                        </div>
-                    )}
-                </div>
-
+                {/* Floating input */}
                 <ChatInput
                     onSend={handleMainSend}
                     disabled={isSending}
                 />
             </main>
 
+            {/* ===== Selection popup ===== */}
             {pendingSelection &&
                 selectionPosition &&
                 pendingSelection.chatId === activeChat?.id && (
@@ -610,53 +884,76 @@ function Chat() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={openSubchat}
                         >
-                            Explore in Subchat <span aria-hidden="true">↗</span>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9" /></svg>
+                            Explore in Subchat
                         </button>
                     </div>
                 )}
 
+            {/* ===== Subchat panel ===== */}
             {subchats.length > 0 && (
-                <div className="subchat-stack">
-                    {subchats.map((subchat) => (
-                        <Subchat
-                            key={subchat.id}
-                            concept={subchat.concept}
-                            originalQuestion={subchat.originalQuestion || ""}
-                            sourceMessage={subchat.sourceMessage || ""}
-                            contextMessages={subchat.contextMessages || []}
-                            messages={subchat.messages}
-                            setMessages={(newMessages) =>
-                                updateSubchatMessages(
-                                    activeChat.id,
-                                    subchat.id,
-                                    newMessages
-                                )
-                            }
-                            isCollapsed={subchat.isCollapsed}
-                            onToggleCollapsed={() => toggleSubchatCollapsed(subchat.id)}
-                            onClose={() => closeSubchat(subchat.id)}
-                        />
-                    ))}
-                </div>
+                <>
+                    {subchatHidden && (
+                        <button
+                            type="button"
+                            className="subchat-reopen-tab"
+                            onClick={() => setSubchatHidden(false)}
+                            aria-label="Show Subchat sidebar"
+                            title="Show Subchat sidebar"
+                        >
+                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z" stroke="currentColor" strokeWidth="1.7" />
+                                <path d="M14.5 4v16" stroke="currentColor" strokeWidth="1.7" />
+                                <path d="m8 9 3 3-3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            <span>Subchat</span>
+                            <span className="subchat-reopen-count">{subchats.length}</span>
+                        </button>
+                    )}
+
+                    <div
+                        className={`subchat-stack ${subchatHidden ? "subchat-stack-hidden" : ""} ${isClosingStack ? "is-closing" : ""}`}
+                        aria-hidden={subchatHidden}
+                    >
+                        {subchats.map((subchat) => (
+                            <Subchat
+                                key={subchat.id}
+                                concept={subchat.concept}
+                                originalQuestion={subchat.originalQuestion || ""}
+                                sourceMessage={subchat.sourceMessage || ""}
+                                contextMessages={subchat.contextMessages || []}
+                                messages={subchat.messages}
+                                setMessages={(newMessages) =>
+                                    updateSubchatMessages(
+                                        activeChat.id,
+                                        subchat.id,
+                                        newMessages
+                                    )
+                                }
+                                isCollapsed={subchat.isCollapsed}
+                                isClosing={closingSubchatIds.includes(subchat.id)}
+                                onToggleCollapsed={() => toggleSubchatCollapsed(subchat.id)}
+                                onFocusMain={handleHideSubchat}
+                                onClose={() => closeSubchat(subchat.id)}
+                            />
+                        ))}
+                    </div>
+                </>
             )}
 
+            {/* ===== Delete confirmation ===== */}
             {deleteConfirmation && (
                 <div className="confirm-modal-backdrop" role="presentation" onMouseDown={(event) => {
                     if (event.target === event.currentTarget) cancelDeleteChat();
                 }}>
                     <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-chat-title" aria-describedby="delete-chat-description">
-                        <div className="confirm-modal-icon" aria-hidden="true">
-                            <Icon name="trash" size={22} />
-                        </div>
-                        <h2 id="delete-chat-title">Confirm delete chat</h2>
+                        <h2 id="delete-chat-title">Delete chat?</h2>
                         <p id="delete-chat-description">
-                            Are you sure you want to delete <strong>“{deleteConfirmation.title}”</strong>? This will also delete its Subchats. This action cannot be undone.
+                            This will delete <strong>"{deleteConfirmation.title}"</strong> and its Subchats.
                         </p>
                         <div className="confirm-modal-actions">
-                            <button type="button" className="confirm-cancel-button" onClick={cancelDeleteChat}>Cancel</button>
-                            <button type="button" className="confirm-delete-button" onClick={confirmDeleteChat}>
-                                <Icon name="trash" size={16} /> Delete chat
-                            </button>
+                            <button type="button" className="confirm-cancel-btn" onClick={cancelDeleteChat}>Cancel</button>
+                            <button type="button" className="confirm-delete-btn" onClick={confirmDeleteChat}>Delete</button>
                         </div>
                     </section>
                 </div>
@@ -665,31 +962,61 @@ function Chat() {
     );
 }
 
-function Icon({ name, size = 16 }) {
-    const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, focusable: "false" };
-    if (name === "pin") return <svg {...common}><path d="M16 3l5 5-4 1-4 4-1 5-2-2-2-2-2-2 5-1 4-4z" /><path d="M5 19l6-6" /></svg>;
-    if (name === "trash") return <svg {...common}><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 10v6M14 10v6" /></svg>;
-    if (name === "chat") return <svg {...common}><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-6.5A7.5 7.5 0 1 1 20 11.5Z" /></svg>;
-    if (name === "moon") return <svg {...common}><path d="M20.9 13A8.5 8.5 0 0 1 11 3.1 8.5 8.5 0 1 0 20.9 13Z" /></svg>;
-    if (name === "sun") return <svg {...common}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg>;
-    return null;
-}
-
-function ChatHistoryItem({ chat, active, disabled, onSelect, onTogglePin, onDelete }) {
+function ChatHistoryItem({ chat, active, disabled, isRenaming, renameValue, onRenameChange, onRenameConfirm, menuOpen, onMenuToggle, onSelect, onRename, onDelete }) {
     return (
-        <div className={`chat-history-row ${active ? "active" : ""}`}>
-            <button type="button" className={`chat-history-item ${active ? "active" : ""}`} onClick={onSelect} disabled={disabled} title={chat.title}>
-                <span className="history-chat-icon"><Icon name="chat" size={16} /></span>
-                <span className="history-chat-title">{chat.title}</span>
-                {chat.subchats?.length > 0 && <span className="history-subchat-count" title={`${chat.subchats.length} Subchat(s)`}>{chat.subchats.length}</span>}
-            </button>
-            <div className="chat-history-actions">
-                <button type="button" className={`history-action-button ${chat.pinned ? "is-pinned" : ""}`} onClick={onTogglePin} title={chat.pinned ? "Unpin chat" : "Pin chat"} aria-label={chat.pinned ? `Unpin ${chat.title}` : `Pin ${chat.title}`} disabled={disabled}>
-                    <Icon name="pin" size={15} />
+        <div className={`history-item ${active ? "active" : ""}`}>
+            {isRenaming ? (
+                <input
+                    className="history-rename-input"
+                    type="text"
+                    value={renameValue}
+                    onChange={(e) => onRenameChange(e.target.value)}
+                    onBlur={onRenameConfirm}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter") onRenameConfirm();
+                        if (e.key === "Escape") onRenameConfirm();
+                    }}
+                    autoFocus
+                />
+            ) : (
+                <button
+                    type="button"
+                    className="history-item-btn"
+                    onClick={onSelect}
+                    disabled={disabled}
+                    title={chat.title}
+                >
+                    <span className="history-item-title">{chat.title}</span>
                 </button>
-                <button type="button" className="history-action-button delete-history-button" onClick={onDelete} title="Delete chat" aria-label={`Delete ${chat.title}`} disabled={disabled}>
-                    <Icon name="trash" size={15} />
+            )}
+
+            <div className="history-item-menu-wrapper">
+                <button
+                    type="button"
+                    className="history-dots-btn"
+                    onClick={onMenuToggle}
+                    title="More"
+                    aria-label="Chat options"
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <circle cx="12" cy="5" r="1.5" />
+                        <circle cx="12" cy="12" r="1.5" />
+                        <circle cx="12" cy="19" r="1.5" />
+                    </svg>
                 </button>
+
+                {menuOpen && (
+                    <div className="history-dropdown" onClick={(e) => e.stopPropagation()}>
+                        <button type="button" onClick={onRename}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
+                            Rename
+                        </button>
+                        <button type="button" className="danger" onClick={onDelete}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /></svg>
+                            Delete
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );
